@@ -1,11 +1,11 @@
 # Conditional multi-step attribution for climate forcings
 
-This directory contains data and Python scripts for reproducing results presented in the paper titled "Conditional multi-step attribution for climate forcings" by Christopher R. Wentland, Michael Weylandt, Laura P. Swiler, Thomas S. Ehrmann, and Diana Bull. This information is released under SCR#3080.0.
+This directory contains data and Python scripts for reproducing results presented in the paper titled "Conditional multi-step attribution for climate forcings" by Christopher R. Wentland, Michael Weylandt, Laura P. Swiler, Thomas S. Ehrmann, and Diana Bull. The scripts are released under SCR#3080.
 
 
 ## Data
 
-Global average impact (centered about counterfactual ensemble mean) time series data files are included in the `data/` directory. These are derived from the "CLDERA E3SM-SPA Simulation Ensembles" dataset, which are released under Sandia Copyright Number 3051.0. These span a range of climate variables, Mt. Pinatubo stratospheric SO2 injection mass, and ensemble member numbers. The general format of each file follows
+Global average impact (centered about counterfactual ensemble mean) time series data files are included in the `data/` directory. These are derived from the "CLDERA E3SM-SPA Simulation Ensembles" dataset, which are released under SCR#3051. These span a range of climate variables, Mt. Pinatubo stratospheric SO2 injection mass, and ensemble member numbers. The general format of each file follows
 
 ```
 {variable}_{mass}Tg_ens{member_num}_glob_monthly.nc
