@@ -5,6 +5,7 @@ from math import pi
 
 import cftime
 import numpy as np
+from scipy.stats import norm
 import xarray as xr
 import matplotlib.pyplot as plt
 
@@ -380,3 +381,135 @@ def plot_1d_likelihoods(
     print(f"Saving image to {outfile}")
     plt.savefig(outfile)
     plt.close(fig)
+
+
+def ll(D, mu, std):
+    return norm.logpdf(D, loc=mu, scale=std)
+
+
+def calc_pvals(
+    pathlist,
+    data_dict,
+    forcelist,
+    enslist,
+    force_var,
+    force_observed,
+    null_forces,
+    mc_evals,
+    norm_dist,
+    experimental=False,
+):
+
+    alt_idx  = forcelist.index(force_observed)
+
+    # determine parent sets
+    parents_list = []
+    nvars = len(pathlist)
+    for var_idx in range(1, nvars):
+        parents_list.append({
+            "child_var": pathlist[var_idx],
+            "parent_vars": pathlist[:var_idx]},
+        )
+
+    parents_list = calc_regressions(
+        parents_list,
+        data_dict,
+        forcelist,
+        enslist,
+        force_var,
+        force_observed
+    )
+
+    # compute mean predictions
+    null_means = {str(force): {force_var: float(force)} for force in null_forces}
+    alt_means  = {force_var: float(force_observed)}
+    for step_idx, step_dict in enumerate(parents_list):
+        child_var   = step_dict["child_var"]
+        parent_vars = step_dict["parent_vars"]
+        betas = step_dict["betas"]
+
+        # compute alt mean
+        alt_mean = betas[0]
+        for var_idx, varname in enumerate(parent_vars):
+            alt_mean += betas[var_idx+1] * alt_means[varname]
+        alt_means[child_var] = alt_mean
+
+        # compute null means
+        for force in null_forces:
+            null_mean = betas[0]
+            for var_idx, varname in enumerate(parent_vars):
+                null_mean += betas[var_idx+1] * null_means[str(force)][varname]
+            null_means[str(force)][child_var] = null_mean
+
+    pvals = []
+    for null_idx, force_null in enumerate(null_forces):
+
+        # compute test statistic distribution under null samples
+        for step_idx, step_dict in enumerate(parents_list):
+
+            if experimental:
+                child_var  = step_dict["child_var"]
+                mu_null = null_means[str(force_null)][child_var]
+                mu_alt  = alt_means[child_var]
+
+            else:
+                force_null_idx = forcelist.index(force_null)
+                mu_null = step_dict["means"][force_null_idx]
+                mu_alt  = step_dict["means"][alt_idx]
+
+            # sample under specific null value
+            samps = norm_dist.rvs(size=mc_evals, loc=mu_null, scale=step_dict["std"])
+
+            # compute null log likelihood under alternative
+            ll_alt = ll(samps, mu_alt, step_dict["std"])
+
+            # compute null log likelihood under null
+            ll_null = ll(samps, mu_null, step_dict["std"])
+
+            if step_idx == 0:
+                ll_alt_tot  = ll_alt.copy()
+                ll_null_tot = ll_null.copy()
+            else:
+                ll_alt_tot  += ll_alt
+                ll_null_tot += ll_null
+
+        test_vals_null = ll_alt_tot - ll_null_tot
+
+        # compute test statistic under observation
+        for step_idx, step_dict in enumerate(parents_list):
+            child_var = step_dict["child_var"]
+
+            # collect observation
+            da_list = data_dict[child_var]["da_list"][alt_idx]
+            obs = calc_avg_values(da_list)
+            samp_obs = np.array([[np.mean(obs)]], dtype=np.float64)
+
+            if experimental:
+                child_var  = step_dict["child_var"]
+                mu_null = null_means[str(force_null)][child_var]
+                mu_alt  = alt_means[child_var]
+
+            else:
+                force_null_idx = forcelist.index(force_null)
+                mu_alt  = step_dict["means"][alt_idx]
+                mu_null = step_dict["means"][force_null_idx]
+
+            # compute observation log likelihood under alternative
+            ll_alt = ll(samp_obs, mu_alt, step_dict["std"])
+
+            # compute observation log likelihood under null
+            ll_null = ll(samp_obs, mu_null, step_dict["std"])
+
+            if step_idx == 0:
+                ll_alt_tot  = ll_alt.copy()
+                ll_null_tot = ll_null.copy()
+            else:
+                ll_alt_tot  += ll_alt
+                ll_null_tot += ll_null
+
+        test_stat_obs = (ll_alt_tot - ll_null_tot)[0]
+
+        pval = np.sum(test_vals_null >= test_stat_obs) / mc_evals
+        pvals.append(pval)
+
+    return np.array(pvals, dtype=np.float64)
