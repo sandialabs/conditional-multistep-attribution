@@ -5,7 +5,7 @@ from math import pi
 
 import cftime
 import numpy as np
-from scipy.stats import norm
+from scipy.stats import norm, normaltest
 import xarray as xr
 import matplotlib.pyplot as plt
 
@@ -383,9 +383,11 @@ def plot_1d_likelihoods(
     plt.close(fig)
 
 
-def ll(D, mu, std):
+def norm_logpdf(D, mu, std):
     return norm.logpdf(D, loc=mu, scale=std)
 
+def norm_pdf(D, mu, std):
+    return norm.pdf(D, loc=mu, scale=std)
 
 def calc_pvals(
     pathlist,
@@ -396,8 +398,8 @@ def calc_pvals(
     force_observed,
     null_forces,
     mc_evals,
-    norm_dist,
-    experimental=False,
+    log_pdf=True,
+    debug=False,
 ):
 
     alt_idx  = forcelist.index(force_observed)
@@ -421,27 +423,6 @@ def calc_pvals(
         normalize=False,
     )
 
-    # compute mean predictions
-    # null_means = {str(force): {force_var: float(force)} for force in null_forces}
-    # alt_means  = {force_var: float(force_observed)}
-    # for step_idx, step_dict in enumerate(parents_list):
-    #     child_var   = step_dict["child_var"]
-    #     parent_vars = step_dict["parent_vars"]
-    #     betas = step_dict["betas"]
-
-    #     # compute alt mean
-    #     alt_mean = betas[0]
-    #     for var_idx, varname in enumerate(parent_vars):
-    #         alt_mean += betas[var_idx+1] * alt_means[varname]
-    #     alt_means[child_var] = alt_mean
-
-    #     # compute null means
-    #     for force in null_forces:
-    #         null_mean = betas[0]
-    #         for var_idx, varname in enumerate(parent_vars):
-    #             null_mean += betas[var_idx+1] * null_means[str(force)][varname]
-    #         null_means[str(force)][child_var] = null_mean
-
     # draw samples
     cond_means = {str(f): {force_var: float(f)} for f in null_forces}
     samples = {str(f): {} for f in null_forces}
@@ -461,9 +442,25 @@ def calc_pvals(
                 scale=step_dict["std"],
             )
 
+    # for f in null_forces:
+    #     # print(f"{f:>6.2f}: {cond_means[str(f)]["TREFHT"]}")
+    #     print(f"{f:>6.2f}: {cond_means[str(f)]["TREFHT"]:.8f} / {np.mean(samples[str(f)]["TREFHT"]):.8f}")
+
+
     pvals = []
+    facs1 = []
+    facs2 = []
+    facs3 = []
+    facs4 = []
+    nnulls = len(null_forces)
+    ll_alt_arr  = np.zeros((mc_evals, nnulls), dtype=np.float64)
+    ll_null_arr = np.zeros((mc_evals, nnulls), dtype=np.float64)
+    test_vals_arr = np.zeros((mc_evals, nnulls), dtype=np.float64)
     for null_idx, force_null in enumerate(null_forces):
         fstr = str(force_null)
+
+        if debug:
+            print(f"{force_null}")
 
         # compute test statistic distribution under null samples
         for step_idx, step_dict in enumerate(parents_list):
@@ -479,6 +476,10 @@ def calc_pvals(
             # retrieve samples under null
             samps = samples[fstr][child_var]
 
+            if debug:
+                print(f"  samp_obs: {np.mean(obs):.8f}")
+                print(f"  samp    : {np.mean(samps):.8f}")
+
             # compute means at alternative and null forcings
             mu_alt  = betas[0]
             mu_null = betas[0]
@@ -493,13 +494,35 @@ def calc_pvals(
                 mu_alt  += betas[var_idx+1] * cond_mean_alt
                 mu_null += betas[var_idx+1] * cond_mean_null
 
-            # compute null log likelihood under alternative forcing
-            ll_alt     = ll(samps,    mu_alt, step_dict["std"])
-            ll_alt_obs = ll(samp_obs, mu_alt, step_dict["std"])
+            if debug:
+                print(f"  mu_alt : {mu_alt:.8f}")
+                print(f"  mu_null: {mu_null:.8f}")
 
-            # compute null log likelihood under null forcing
-            ll_null     = ll(samps,    mu_null, step_dict["std"])
-            ll_null_obs = ll(samp_obs, mu_null, step_dict["std"])
+            # compute likelihoods
+            if log_pdf:
+                ll_alt      = norm_logpdf(samps,    mu_alt,  step_dict["std"])
+                ll_alt_obs  = norm_logpdf(samp_obs, mu_alt,  step_dict["std"])
+                ll_null     = norm_logpdf(samps,    mu_null, step_dict["std"])
+                ll_null_obs = norm_logpdf(samp_obs, mu_null, step_dict["std"])
+            else:
+                ll_alt      = norm_pdf(samps,    mu_alt,  step_dict["std"])
+                ll_alt_obs  = norm_pdf(samp_obs, mu_alt,  step_dict["std"])
+                ll_null     = norm_pdf(samps,    mu_null, step_dict["std"])
+                ll_null_obs = norm_pdf(samp_obs, mu_null, step_dict["std"])
+
+            if debug:
+                print(f"  ll_alt     : {np.mean(ll_alt):.8f}")
+                print(f"  ll_alt_obs : {ll_alt_obs[0][0]:.8f}")
+                print(f"  ll_null    : {np.mean(ll_null):.8f}")
+                print(f"  ll_null_obs: {ll_null_obs[0][0]:.8f}")
+
+                # fac = np.mean(ll_alt - ll_null)
+                # fac_obs = (ll_alt_obs - ll_null_obs)[0,0]
+                # print(f"  normal: {fac:.8f}")
+                # print(f"  observ: {fac_obs:.8f}")
+                # facs.append(fac)
+                # facs_obs.append(fac_obs)
+
 
             if step_idx == 0:
                 ll_alt_tot      = ll_alt.copy()
@@ -507,18 +530,110 @@ def calc_pvals(
                 ll_alt_obs_tot  = ll_alt_obs.copy()
                 ll_null_obs_tot = ll_null_obs.copy()
             else:
-                ll_alt_tot      += ll_alt
-                ll_null_tot     += ll_null
-                ll_alt_obs_tot  += ll_alt_obs
-                ll_null_obs_tot += ll_null_obs
+                if log_pdf:
+                    ll_alt_tot      += ll_alt
+                    ll_null_tot     += ll_null
+                    ll_alt_obs_tot  += ll_alt_obs
+                    ll_null_obs_tot += ll_null_obs
+                else:
+                    ll_alt_tot      *= ll_alt
+                    ll_null_tot     *= ll_null
+                    ll_alt_obs_tot  *= ll_alt_obs
+                    ll_null_obs_tot *= ll_null_obs
 
-        test_vals_null = ll_alt_tot      - ll_null_tot
-        test_val_obs   = (ll_alt_obs_tot - ll_null_obs_tot)[0]
+        if log_pdf:
+            test_vals_null = ll_alt_tot      - ll_null_tot
+            test_val_obs   = (ll_alt_obs_tot - ll_null_obs_tot)[0,0]
+        else:
+            test_vals_null = ll_alt_tot      / ll_null_tot
+            test_val_obs   = (ll_alt_obs_tot / ll_null_obs_tot)[0,0]
+
+        if debug:
+            # ll_alt_arr[:, null_idx]  = ll_alt_tot.copy()
+            # ll_null_arr[:, null_idx] = ll_null_tot.copy()
+            test_vals_arr[:, null_idx] = test_vals_null.copy()
+            print(f"  test_vals_null: {np.mean(test_vals_null):.8f}")
+            print(f"  test_vals_obs : {test_val_obs:.8f}")
+
+            facs1.append(np.mean(ll_alt_tot))
+            facs2.append(np.mean(ll_null_tot))
+            facs3.append(np.mean(test_vals_null))
+            facs4.append(test_val_obs)
 
         pval = np.mean(test_vals_null > test_val_obs)
-        print(f"{force_null}: {pval}")
+
+        print(f"  pval: {pval}")
         pvals.append(pval)
 
-    # breakpoint()
+    if debug:
+
+        fig, ax = plt.subplots(1, 1, dpi=300)
+
+        lims = [-4, 2]
+        nbins = 151
+        bin_edges = np.linspace(lims[0], lims[1], nbins+1)
+        hist_arr = np.zeros((nbins, nnulls), dtype=np.float64)
+        for null_idx in range(nnulls):
+            hist, _ = np.histogram(test_vals_arr[:, null_idx], bins=bin_edges)
+            hist_arr[:, null_idx] = hist.copy()
+        bins = (bin_edges[:-1] + bin_edges[1:]) / 2
+        ax.contourf(
+            null_forces,
+            bins,
+            hist_arr,
+            levels=np.linspace(0, 100000, 50),
+            extend="both",
+        )
+
+
+        artist1, = ax.plot(null_forces, facs1, color="red")
+        artist2, = ax.plot(null_forces, facs2, color="blue")
+        artist3, = ax.plot(null_forces, facs3, color="m")
+        artist4, = ax.plot(null_forces, facs4, color="c")
+
+        ax.legend(
+            [artist1, artist2, artist3, artist4],
+            [
+                r"$P_{f1}(D_{f0})$",
+                r"$P_{f0}(D_{f0})$",
+                r"$\Lambda_{f0,f1}(D_{f0})$",
+                r"$\lambda_{f0,f1}(O)$",
+            ],
+            fontsize=16,
+            loc="lower right"
+        )
+
+        ax.set_ylim(lims)
+
+        plt.tight_layout()
+        plt.savefig(f"./figs/test.png")
+
+        plt.close(fig)
+
+        # lims = [
+        #     [-5, 5],
+        #     [0, 4],
+        #     [-0.1, 0.1]
+        # ]
+
+        # for idx, hist_src in enumerate([ll_alt_arr, ll_null_arr, test_vals_arr]):
+        #     fig, ax = plt.subplots(1, 1, dpi=300)
+
+        #     # min_val = np.min(hist_src)
+        #     # max_val = np.max(hist_src)
+        #     min_val = lims[idx][0]
+        #     max_val = lims[idx][1]
+        #     bin_edges = np.linspace(min_val, max_val, nbins+1)
+        #     hist_arr = np.zeros((nbins, nnulls), dtype=np.float64)
+        #     for null_idx in range(nnulls):
+        #         hist, _ = np.histogram(hist_src[:, null_idx], bins=bin_edges)
+        #         hist_arr[:, null_idx] = hist.copy()
+
+        #     bins = (bin_edges[:-1] + bin_edges[1:]) / 2
+        #     ax.contourf(null_forces, bins, hist_arr)
+        #     plt.tight_layout()
+
+        #     plt.savefig(f"./figs/test{idx}.png")
+        #     plt.close(fig)
 
     return np.array(pvals, dtype=np.float64)

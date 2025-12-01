@@ -7,7 +7,7 @@ from scipy.stats import norm
 from utils import load_avg_data, calc_pvals
 from constants import DATADIR_BASE, FIGDIR_BASE, SPACETIMES, INFILE_BASE
 from constants import VARNAMES, VARLABELS, ENSLIST, FORCELIST, TIMEBOUNDS, REGIONBOUNDS
-from constants import FORCE_VAR, FORCE_OBSERVED, FORCE_UNITS
+from constants import FORCE_VAR, FORCE_OBSERVED, FORCE_UNITS, NFORCE_SAMP
 from constants import LEGEND_FONTSIZE, AXIS_FONTSIZE, TICKLABELS_FONTSIZE, TITLE_FONTSIZE, PATHNAMES_PLOT, LATEX
 
 
@@ -16,15 +16,18 @@ from constants import LEGEND_FONTSIZE, AXIS_FONTSIZE, TICKLABELS_FONTSIZE, TITLE
 ubound = 1.0
 pathdicts = {
     "surf-single": ["SO2", "TREFHT"],
-    "surf-multi": ["SO2", "FSNT", "TREFHT"],
+    # "surf-multi": ["SO2", "FSNT", "TREFHT"],
 }
 
 mc_evals = 1000000
 
 plotcolors = ["royalblue", "darkorange"]
-plot_legend = [False] * 4 + [True] + [False] * 4
+# plot_legend = [False] * 4 + [True] + [False] * 4
+plot_legend = [False] * 20
 legend_loc = "upper left"
 pbounds = [0.001, 0.01, 0.05, 0.1]
+
+pval_threshold = 0.05
 
 # ----- END USER INPUTS -----
 
@@ -32,9 +35,16 @@ pbounds = [0.001, 0.01, 0.05, 0.1]
 letters = [chr(i) for i in range(ord('a'), ord('z')+1)]
 letters = np.array(letters[:len(pbounds)+1])
 
-legend_labels = [PATHNAMES_PLOT[path_name] for path_name in pathdicts.keys()]
+legend_labels = [PATHNAMES_PLOT[path_name] for path_name in pathdicts.keys()] + \
+    [f"p = {pval_threshold}"]
 
-null_forces = [force for force in FORCELIST if force != FORCE_OBSERVED]
+null_forces = list(np.linspace(
+    min(FORCELIST),
+    max(FORCELIST),
+    NFORCE_SAMP,
+))
+obs_idx = null_forces.index(FORCE_OBSERVED)  # for excluding observation
+null_forces = null_forces[:obs_idx] + null_forces[obs_idx+1:]
 
 rng = np.random.default_rng(seed=10)
 norm_dist = norm
@@ -42,7 +52,6 @@ norm_dist.random_state = rng
 
 # for convenience
 minval = 1.0 / mc_evals
-nnull  = len(null_forces)
 
 # temporarily remove forcing from variable list
 varnames = []
@@ -72,15 +81,10 @@ for region_idx, (region, period) in enumerate(SPACETIMES):
     # load global time series data
     data_dict = load_avg_data(datadir, INFILE_BASE, varnames, FORCELIST, ENSLIST)
 
-    # re-insert forcing variable
-    varnames_regress = [FORCE_VAR] + varnames
-
     fig, ax = plt.subplots(1, 1)
     ax.set_yscale("log")
 
-    npaths = len(pathdicts)
-    barwidth = 0.9 / npaths
-
+    artist_list = []
     for path_idx, (path_name, pathlist) in enumerate(pathdicts.items()):
 
         print(f"Path: {"-".join(pathlist)}")
@@ -94,8 +98,6 @@ for region_idx, (region, period) in enumerate(SPACETIMES):
             FORCE_OBSERVED,
             null_forces,
             mc_evals,
-            norm_dist,
-            experimental=True,
         )
 
         if LATEX:
@@ -110,29 +112,35 @@ for region_idx, (region, period) in enumerate(SPACETIMES):
                 texstrs.append(f"\\tc{texletters[idx]} {texstr}")
             print("LATEX: " + " & ".join(texstrs) + "\n")
 
-
-        # for thresholding to minval
-        pvals_plot = [max(minval, pval) for pval in pvals]
-
-        offset = -0.45 + barwidth * (1 + 2 * path_idx) / 2
-        bars = ax.bar(
-            np.arange(nnull) + offset,
-            pvals_plot,
-            width=barwidth,
+        artist, = ax.plot(
+            null_forces[:obs_idx],
+            pvals[:obs_idx],
             color=plotcolors[path_idx],
-            edgecolor="k"
+            linewidth=2,
         )
+        ax.plot(
+            null_forces[obs_idx:],
+            pvals[obs_idx:],
+            color=plotcolors[path_idx],
+            linewidth=2,
+        )
+
+        artist_list.append(artist)
 
     ax.set_xlabel(f"{VARLABELS[FORCE_VAR]} impact ({FORCE_UNITS})", fontsize=AXIS_FONTSIZE)
     ax.set_ylabel("p-value", fontsize=AXIS_FONTSIZE)
-    ax.set_xticks(np.arange(nnull), [f"{force}" for force in null_forces])
+    ax.set_xticks(FORCELIST, [f"{force}" for force in FORCELIST])
     ax.set_ylim([minval, ubound])
     ax.tick_params(axis="both", which="major", labelsize=TICKLABELS_FONTSIZE)
     ax.tick_params(axis="y", which="minor", left=True)
     ax.set_title(f"{regionlabel} {timelabel}", fontsize=TITLE_FONTSIZE)
 
+    # plot threshold and observation
+    artist = ax.axhline(pval_threshold, color="k", linestyle="--")
+    artist_list.append(artist)
+
     if plot_legend[region_idx]:
-        ax.legend(legend_labels, fontsize=LEGEND_FONTSIZE, loc=legend_loc)
+        ax.legend(artist_list, legend_labels, fontsize=LEGEND_FONTSIZE, loc=legend_loc)
 
     plt.tight_layout()
     outfile = os.path.join(outdir, f"{region}-{period}-pval.png")
