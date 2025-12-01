@@ -417,99 +417,108 @@ def calc_pvals(
         forcelist,
         enslist,
         force_var,
-        force_observed
+        force_observed,
+        normalize=False,
     )
 
     # compute mean predictions
-    null_means = {str(force): {force_var: float(force)} for force in null_forces}
-    alt_means  = {force_var: float(force_observed)}
+    # null_means = {str(force): {force_var: float(force)} for force in null_forces}
+    # alt_means  = {force_var: float(force_observed)}
+    # for step_idx, step_dict in enumerate(parents_list):
+    #     child_var   = step_dict["child_var"]
+    #     parent_vars = step_dict["parent_vars"]
+    #     betas = step_dict["betas"]
+
+    #     # compute alt mean
+    #     alt_mean = betas[0]
+    #     for var_idx, varname in enumerate(parent_vars):
+    #         alt_mean += betas[var_idx+1] * alt_means[varname]
+    #     alt_means[child_var] = alt_mean
+
+    #     # compute null means
+    #     for force in null_forces:
+    #         null_mean = betas[0]
+    #         for var_idx, varname in enumerate(parent_vars):
+    #             null_mean += betas[var_idx+1] * null_means[str(force)][varname]
+    #         null_means[str(force)][child_var] = null_mean
+
+    # draw samples
+    cond_means = {str(f): {force_var: float(f)} for f in null_forces}
+    samples = {str(f): {} for f in null_forces}
     for step_idx, step_dict in enumerate(parents_list):
         child_var   = step_dict["child_var"]
         parent_vars = step_dict["parent_vars"]
         betas = step_dict["betas"]
 
-        # compute alt mean
-        alt_mean = betas[0]
-        for var_idx, varname in enumerate(parent_vars):
-            alt_mean += betas[var_idx+1] * alt_means[varname]
-        alt_means[child_var] = alt_mean
-
-        # compute null means
-        for force in null_forces:
-            null_mean = betas[0]
+        for f in null_forces:
+            fstr = str(f)
+            cond_means[fstr][child_var] = betas[0]
             for var_idx, varname in enumerate(parent_vars):
-                null_mean += betas[var_idx+1] * null_means[str(force)][varname]
-            null_means[str(force)][child_var] = null_mean
+                cond_means[fstr][child_var] += betas[var_idx+1] * cond_means[fstr][varname]
+            samples[fstr][child_var] = norm.rvs(
+                size=mc_evals,
+                loc=cond_means[fstr][child_var],
+                scale=step_dict["std"],
+            )
 
     pvals = []
     for null_idx, force_null in enumerate(null_forces):
+        fstr = str(force_null)
 
         # compute test statistic distribution under null samples
         for step_idx, step_dict in enumerate(parents_list):
+            child_var   = step_dict["child_var"]
+            parent_vars = step_dict["parent_vars"]
+            betas = step_dict["betas"]
 
-            if experimental:
-                child_var  = step_dict["child_var"]
-                mu_null = null_means[str(force_null)][child_var]
-                mu_alt  = alt_means[child_var]
-
-            else:
-                force_null_idx = forcelist.index(force_null)
-                mu_null = step_dict["means"][force_null_idx]
-                mu_alt  = step_dict["means"][alt_idx]
-
-            # sample under specific null value
-            samps = norm_dist.rvs(size=mc_evals, loc=mu_null, scale=step_dict["std"])
-
-            # compute null log likelihood under alternative
-            ll_alt = ll(samps, mu_alt, step_dict["std"])
-
-            # compute null log likelihood under null
-            ll_null = ll(samps, mu_null, step_dict["std"])
-
-            if step_idx == 0:
-                ll_alt_tot  = ll_alt.copy()
-                ll_null_tot = ll_null.copy()
-            else:
-                ll_alt_tot  += ll_alt
-                ll_null_tot += ll_null
-
-        test_vals_null = ll_alt_tot - ll_null_tot
-
-        # compute test statistic under observation
-        for step_idx, step_dict in enumerate(parents_list):
-            child_var = step_dict["child_var"]
-
-            # collect observation
+            # collect downstream observation
             da_list = data_dict[child_var]["da_list"][alt_idx]
             obs = calc_avg_values(da_list)
             samp_obs = np.array([[np.mean(obs)]], dtype=np.float64)
 
-            if experimental:
-                child_var  = step_dict["child_var"]
-                mu_null = null_means[str(force_null)][child_var]
-                mu_alt  = alt_means[child_var]
+            # retrieve samples under null
+            samps = samples[fstr][child_var]
 
-            else:
-                force_null_idx = forcelist.index(force_null)
-                mu_alt  = step_dict["means"][alt_idx]
-                mu_null = step_dict["means"][force_null_idx]
+            # compute means at alternative and null forcings
+            mu_alt  = betas[0]
+            mu_null = betas[0]
+            for var_idx, varname in enumerate(parent_vars):
+                if varname == force_var:
+                    cond_mean_alt  = force_observed
+                    cond_mean_null = force_null
+                else:
+                    cond_mean_alt = np.mean(calc_avg_values(data_dict[varname]["da_list"][alt_idx]))
+                    # cond_mean_alt  = cond_means[fstr][varname]
+                    cond_mean_null = cond_means[fstr][varname]
+                mu_alt  += betas[var_idx+1] * cond_mean_alt
+                mu_null += betas[var_idx+1] * cond_mean_null
 
-            # compute observation log likelihood under alternative
-            ll_alt = ll(samp_obs, mu_alt, step_dict["std"])
+            # compute null log likelihood under alternative forcing
+            ll_alt     = ll(samps,    mu_alt, step_dict["std"])
+            ll_alt_obs = ll(samp_obs, mu_alt, step_dict["std"])
 
-            # compute observation log likelihood under null
-            ll_null = ll(samp_obs, mu_null, step_dict["std"])
+            # compute null log likelihood under null forcing
+            ll_null     = ll(samps,    mu_null, step_dict["std"])
+            ll_null_obs = ll(samp_obs, mu_null, step_dict["std"])
 
             if step_idx == 0:
-                ll_alt_tot  = ll_alt.copy()
-                ll_null_tot = ll_null.copy()
+                ll_alt_tot      = ll_alt.copy()
+                ll_null_tot     = ll_null.copy()
+                ll_alt_obs_tot  = ll_alt_obs.copy()
+                ll_null_obs_tot = ll_null_obs.copy()
             else:
-                ll_alt_tot  += ll_alt
-                ll_null_tot += ll_null
+                ll_alt_tot      += ll_alt
+                ll_null_tot     += ll_null
+                ll_alt_obs_tot  += ll_alt_obs
+                ll_null_obs_tot += ll_null_obs
 
-        test_stat_obs = (ll_alt_tot - ll_null_tot)[0]
+        test_vals_null = ll_alt_tot      - ll_null_tot
+        test_val_obs   = (ll_alt_obs_tot - ll_null_obs_tot)[0]
 
-        pval = np.sum(test_vals_null >= test_stat_obs) / mc_evals
+        pval = np.mean(test_vals_null > test_val_obs)
+        print(f"{force_null}: {pval}")
         pvals.append(pval)
+
+    # breakpoint()
 
     return np.array(pvals, dtype=np.float64)
