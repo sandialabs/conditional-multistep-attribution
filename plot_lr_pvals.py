@@ -16,7 +16,7 @@ from constants import LEGEND_FONTSIZE, AXIS_FONTSIZE, TICKLABELS_FONTSIZE, TITLE
 ubound = 1.0
 pathdicts = {
     "surf-single": ["SO2", "TREFHT"],
-    # "surf-multi": ["SO2", "FSNT", "TREFHT"],
+    "surf-multi": ["SO2", "FSNT", "TREFHT"],
 }
 
 mc_evals = 1000000
@@ -27,7 +27,7 @@ plot_legend = [False] * 20
 legend_loc = "upper left"
 pbounds = [0.001, 0.01, 0.05, 0.1]
 
-pval_threshold = 0.05
+pval_thresh = [0.05, 0.1]
 
 # ----- END USER INPUTS -----
 
@@ -35,8 +35,7 @@ pval_threshold = 0.05
 letters = [chr(i) for i in range(ord('a'), ord('z')+1)]
 letters = np.array(letters[:len(pbounds)+1])
 
-legend_labels = [PATHNAMES_PLOT[path_name] for path_name in pathdicts.keys()] + \
-    [f"p = {pval_threshold}"]
+legend_labels = [PATHNAMES_PLOT[path_name] for path_name in pathdicts.keys()]
 
 null_forces = list(np.linspace(
     min(FORCELIST),
@@ -101,16 +100,38 @@ for region_idx, (region, period) in enumerate(SPACETIMES):
         )
 
         if LATEX:
-            # pbounds
+            # downselect at forcelist
+            pvals_tex = []
+            for force in FORCELIST:
+                if force == FORCE_OBSERVED:
+                    continue
+                force_idx = null_forces.index(force)
+                pvals_tex.append(pvals[force_idx])
+
+            # table of p values
             texstrs = []
-            texletters = letters[np.searchsorted(pbounds, pvals)]
-            for idx, pval in enumerate(pvals):
+            texletters = letters[np.searchsorted(pbounds, pvals_tex)]
+            for idx, pval in enumerate(pvals_tex):
                 if pval == 0.0:
                     texstr = f"$<$ {minval:#.2e}".replace("e-0", "e-").replace("e+00", "")
                 else:
                     texstr = f"{pval:#.2e}".replace("e-0", "e-").replace("e+00", "")
                 texstrs.append(f"\\tc{texletters[idx]} {texstr}")
-            print("LATEX: " + " & ".join(texstrs) + "\n")
+            print("PVALUES: " + " & ".join(texstrs) + "\n")
+
+            # confidence intervals
+            for idx, pthresh in enumerate(pval_thresh):
+                # upper and lower bound indices
+                thresh_bools = list(pvals > pthresh)
+                thresh_bools_rev = thresh_bools[::-1]
+                cl_idx = thresh_bools.index(True)
+                cu_idx = len(thresh_bools) - 1 - thresh_bools_rev.index(True)
+
+                # actual forcing values
+                cl = null_forces[cl_idx]
+                cu = null_forces[cu_idx]
+
+                print(f"CI {pthresh:>4.2f}: {cl:>4.1f} & {cu:>4.1f} \n")
 
         artist, = ax.plot(
             null_forces[:obs_idx],
@@ -134,10 +155,6 @@ for region_idx, (region, period) in enumerate(SPACETIMES):
     ax.tick_params(axis="both", which="major", labelsize=TICKLABELS_FONTSIZE)
     ax.tick_params(axis="y", which="minor", left=True)
     ax.set_title(f"{regionlabel} {timelabel}", fontsize=TITLE_FONTSIZE)
-
-    # plot threshold and observation
-    artist = ax.axhline(pval_threshold, color="k", linestyle="--")
-    artist_list.append(artist)
 
     if plot_legend[region_idx]:
         ax.legend(artist_list, legend_labels, fontsize=LEGEND_FONTSIZE, loc=legend_loc)

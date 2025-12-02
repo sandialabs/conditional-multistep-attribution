@@ -65,7 +65,7 @@ PATHNAMES_PLOT = {
 ENSLIST = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
 FORCELIST = [0, 1, 3, 5, 7, 10, 13, 15]
 FORCE_OBSERVED = 10
-NFORCE_SAMP = 301
+NFORCE_SAMP = 151
 
 # line plot parameters
 colormap = cm.viridis_r
@@ -97,7 +97,7 @@ timeaxis_ticks = [
     "1994-01-15",
 ]
 
-LATEX = False
+LATEX = True
 
 # ----- END USER SETTINGS -----
 
