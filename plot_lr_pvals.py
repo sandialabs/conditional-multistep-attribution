@@ -7,7 +7,7 @@ from scipy.stats import norm
 from utils import load_avg_data, calc_pvals
 from constants import DATADIR_BASE, FIGDIR_BASE, SPACETIMES, INFILE_BASE
 from constants import VARNAMES, VARLABELS, ENSLIST, FORCELIST, TIMEBOUNDS, REGIONBOUNDS
-from constants import FORCE_VAR, FORCE_OBSERVED, FORCE_UNITS, NFORCE_SAMP
+from constants import FORCE_VAR, FORCE_OBSERVED, FORCE_UNITS
 from constants import LEGEND_FONTSIZE, AXIS_FONTSIZE, TICKLABELS_FONTSIZE, TITLE_FONTSIZE, PATHNAMES_PLOT, LATEX
 
 
@@ -20,12 +20,15 @@ pathdicts = {
 }
 
 mc_evals = 1000000
+nforce_samp = 151
 
 plotcolors = ["royalblue", "darkorange"]
-# plot_legend = [False] * 4 + [True] + [False] * 4
 plot_legend = [False] * 20
 legend_loc = "upper left"
 pbounds = [0.001, 0.01, 0.05, 0.1]
+
+# adjust this for Bonferroni correction (number of forcing levels)
+bonferroni = 1
 
 pval_thresh = [0.05, 0.1]
 
@@ -35,12 +38,15 @@ pval_thresh = [0.05, 0.1]
 letters = [chr(i) for i in range(ord('a'), ord('z')+1)]
 letters = np.array(letters[:len(pbounds)+1])
 
+if bonferroni != 1:
+    print("*"*20 + f"\nWARNING: Bonferroni correction is {bonferroni}\n" + "*"*20)
+
 legend_labels = [PATHNAMES_PLOT[path_name] for path_name in pathdicts.keys()]
 
 null_forces = list(np.linspace(
     min(FORCELIST),
     max(FORCELIST),
-    NFORCE_SAMP,
+    nforce_samp,
 ))
 obs_idx = null_forces.index(FORCE_OBSERVED)  # for excluding observation
 null_forces = null_forces[:obs_idx] + null_forces[obs_idx+1:]
@@ -98,6 +104,8 @@ for region_idx, (region, period) in enumerate(SPACETIMES):
             null_forces,
             mc_evals,
         )
+
+        pvals *= bonferroni
 
         if LATEX:
             # downselect at forcelist

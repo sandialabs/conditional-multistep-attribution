@@ -444,10 +444,6 @@ def calc_pvals(
             )
 
     pvals = []
-    facs1 = []
-    facs2 = []
-    facs3 = []
-    facs4 = []
     nnulls = len(null_forces)
     test_vals_arr = np.zeros((mc_evals, nnulls), dtype=np.float64)
     for null_idx, force_null in enumerate(null_forces):
@@ -503,10 +499,6 @@ def calc_pvals(
 
         if DEBUG:
             test_vals_arr[:, null_idx] = test_vals_null.copy()
-            facs1.append(np.mean(ll_alt_tot))
-            facs2.append(np.mean(ll_null_tot))
-            facs3.append(np.mean(test_vals_null))
-            facs4.append(test_val_obs)
 
         pval = np.mean(test_vals_null > test_val_obs)
         pvals.append(pval)
