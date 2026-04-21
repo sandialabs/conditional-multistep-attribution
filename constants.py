@@ -96,7 +96,7 @@ timeaxis_ticks = [
     "1994-01-15",
 ]
 
-LATEX = False
+LATEX = True
 
 # ----- END USER SETTINGS -----
 

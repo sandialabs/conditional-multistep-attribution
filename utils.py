@@ -10,6 +10,9 @@ import xarray as xr
 import matplotlib.pyplot as plt
 
 
+DEBUG = False
+
+
 def load_avg_data(datadir, datafile_base, varlist, forcelist, enslist, debug=False):
 
     data_dict = {}
@@ -383,9 +386,11 @@ def plot_1d_likelihoods(
     plt.close(fig)
 
 
-def ll(D, mu, std):
+def norm_logpdf(D, mu, std):
     return norm.logpdf(D, loc=mu, scale=std)
 
+def norm_pdf(D, mu, std):
+    return norm.pdf(D, loc=mu, scale=std)
 
 def calc_pvals(
     pathlist,
@@ -396,8 +401,6 @@ def calc_pvals(
     force_observed,
     null_forces,
     mc_evals,
-    norm_dist,
-    experimental=False,
 ):
 
     alt_idx  = forcelist.index(force_observed)
@@ -417,99 +420,130 @@ def calc_pvals(
         forcelist,
         enslist,
         force_var,
-        force_observed
+        force_observed,
+        normalize=False,
     )
 
-    # compute mean predictions
-    null_means = {str(force): {force_var: float(force)} for force in null_forces}
-    alt_means  = {force_var: float(force_observed)}
+    # draw samples
+    cond_means = {str(f): {force_var: float(f)} for f in null_forces}
+    samples = {str(f): {} for f in null_forces}
     for step_idx, step_dict in enumerate(parents_list):
         child_var   = step_dict["child_var"]
         parent_vars = step_dict["parent_vars"]
         betas = step_dict["betas"]
 
-        # compute alt mean
-        alt_mean = betas[0]
-        for var_idx, varname in enumerate(parent_vars):
-            alt_mean += betas[var_idx+1] * alt_means[varname]
-        alt_means[child_var] = alt_mean
-
-        # compute null means
-        for force in null_forces:
-            null_mean = betas[0]
+        for f in null_forces:
+            fstr = str(f)
+            cond_means[fstr][child_var] = betas[0]
             for var_idx, varname in enumerate(parent_vars):
-                null_mean += betas[var_idx+1] * null_means[str(force)][varname]
-            null_means[str(force)][child_var] = null_mean
+                cond_means[fstr][child_var] += betas[var_idx+1] * cond_means[fstr][varname]
+            samples[fstr][child_var] = norm.rvs(
+                size=mc_evals,
+                loc=cond_means[fstr][child_var],
+                scale=step_dict["std"],
+            )
 
     pvals = []
+    nnulls = len(null_forces)
+    test_vals_arr = np.zeros((mc_evals, nnulls), dtype=np.float64)
     for null_idx, force_null in enumerate(null_forces):
+        fstr = str(force_null)
 
         # compute test statistic distribution under null samples
         for step_idx, step_dict in enumerate(parents_list):
+            child_var   = step_dict["child_var"]
+            parent_vars = step_dict["parent_vars"]
+            betas = step_dict["betas"]
 
-            if experimental:
-                child_var  = step_dict["child_var"]
-                mu_null = null_means[str(force_null)][child_var]
-                mu_alt  = alt_means[child_var]
-
-            else:
-                force_null_idx = forcelist.index(force_null)
-                mu_null = step_dict["means"][force_null_idx]
-                mu_alt  = step_dict["means"][alt_idx]
-
-            # sample under specific null value
-            samps = norm_dist.rvs(size=mc_evals, loc=mu_null, scale=step_dict["std"])
-
-            # compute null log likelihood under alternative
-            ll_alt = ll(samps, mu_alt, step_dict["std"])
-
-            # compute null log likelihood under null
-            ll_null = ll(samps, mu_null, step_dict["std"])
-
-            if step_idx == 0:
-                ll_alt_tot  = ll_alt.copy()
-                ll_null_tot = ll_null.copy()
-            else:
-                ll_alt_tot  += ll_alt
-                ll_null_tot += ll_null
-
-        test_vals_null = ll_alt_tot - ll_null_tot
-
-        # compute test statistic under observation
-        for step_idx, step_dict in enumerate(parents_list):
-            child_var = step_dict["child_var"]
-
-            # collect observation
+            # collect downstream observation
             da_list = data_dict[child_var]["da_list"][alt_idx]
             obs = calc_avg_values(da_list)
             samp_obs = np.array([[np.mean(obs)]], dtype=np.float64)
 
-            if experimental:
-                child_var  = step_dict["child_var"]
-                mu_null = null_means[str(force_null)][child_var]
-                mu_alt  = alt_means[child_var]
+            # retrieve samples under null
+            samps = samples[fstr][child_var]
 
-            else:
-                force_null_idx = forcelist.index(force_null)
-                mu_alt  = step_dict["means"][alt_idx]
-                mu_null = step_dict["means"][force_null_idx]
+            # compute means at alternative and null forcings
+            mu_alt  = betas[0]
+            mu_null = betas[0]
+            for var_idx, varname in enumerate(parent_vars):
+                if varname == force_var:
+                    cond_mean_alt  = force_observed
+                    cond_mean_null = force_null
+                else:
+                    cond_mean_alt = np.mean(calc_avg_values(data_dict[varname]["da_list"][alt_idx]))
+                    # cond_mean_alt  = cond_means[fstr][varname]
+                    cond_mean_null = cond_means[fstr][varname]
+                mu_alt  += betas[var_idx+1] * cond_mean_alt
+                mu_null += betas[var_idx+1] * cond_mean_null
 
-            # compute observation log likelihood under alternative
-            ll_alt = ll(samp_obs, mu_alt, step_dict["std"])
-
-            # compute observation log likelihood under null
-            ll_null = ll(samp_obs, mu_null, step_dict["std"])
+            # compute likelihoods
+            ll_alt      = norm_logpdf(samps,    mu_alt,  step_dict["std"])
+            ll_alt_obs  = norm_logpdf(samp_obs, mu_alt,  step_dict["std"])
+            ll_null     = norm_logpdf(samps,    mu_null, step_dict["std"])
+            ll_null_obs = norm_logpdf(samp_obs, mu_null, step_dict["std"])
 
             if step_idx == 0:
-                ll_alt_tot  = ll_alt.copy()
-                ll_null_tot = ll_null.copy()
+                ll_alt_tot      = ll_alt.copy()
+                ll_null_tot     = ll_null.copy()
+                ll_alt_obs_tot  = ll_alt_obs.copy()
+                ll_null_obs_tot = ll_null_obs.copy()
             else:
-                ll_alt_tot  += ll_alt
-                ll_null_tot += ll_null
+                ll_alt_tot      += ll_alt
+                ll_null_tot     += ll_null
+                ll_alt_obs_tot  += ll_alt_obs
+                ll_null_obs_tot += ll_null_obs
 
-        test_stat_obs = (ll_alt_tot - ll_null_tot)[0]
+        test_vals_null = ll_alt_tot      - ll_null_tot
+        test_val_obs   = (ll_alt_obs_tot - ll_null_obs_tot)[0,0]
 
-        pval = np.sum(test_vals_null >= test_stat_obs) / mc_evals
+        if DEBUG:
+            test_vals_arr[:, null_idx] = test_vals_null.copy()
+
+        pval = np.mean(test_vals_null > test_val_obs)
         pvals.append(pval)
+
+    if DEBUG:
+
+        fig, ax = plt.subplots(1, 1, dpi=300)
+        lims = [-4, 2]
+        nbins = 151
+        bin_edges = np.linspace(lims[0], lims[1], nbins+1)
+        hist_arr = np.zeros((nbins, nnulls), dtype=np.float64)
+        for null_idx in range(nnulls):
+            hist, _ = np.histogram(test_vals_arr[:, null_idx], bins=bin_edges)
+            hist_arr[:, null_idx] = hist.copy()
+        bins = (bin_edges[:-1] + bin_edges[1:]) / 2
+        ax.contourf(
+            null_forces,
+            bins,
+            hist_arr,
+            levels=np.linspace(0, 100000, 50),
+            extend="both",
+        )
+
+        artist1, = ax.plot(null_forces, facs1, color="red")
+        artist2, = ax.plot(null_forces, facs2, color="blue")
+        artist3, = ax.plot(null_forces, facs3, color="m")
+        artist4, = ax.plot(null_forces, facs4, color="c")
+
+        ax.legend(
+            [artist1, artist2, artist3, artist4],
+            [
+                r"$P_{f1}(D_{f0})$",
+                r"$P_{f0}(D_{f0})$",
+                r"$\Lambda_{f0,f1}(D_{f0})$",
+                r"$\lambda_{f0,f1}(O)$",
+            ],
+            fontsize=16,
+            loc="lower right"
+        )
+
+        ax.set_ylim(lims)
+
+        plt.tight_layout()
+        plt.savefig(f"./figs/test.png")
+
+        plt.close(fig)
 
     return np.array(pvals, dtype=np.float64)
